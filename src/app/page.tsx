@@ -65,7 +65,7 @@ export default function ChatPage() {
     typingUsers,
   } = useChatStore()
 
-  const { authenticate, joinChannel, leaveChannel, sendMessage, sendTyping } = useSocket()
+  const { joinChannel, leaveChannel, sendMessage, sendTyping } = useSocket()
   const { isSupported: notifSupported, permission: notifPermission, requestPermission: requestNotifPermission, notify: sendNotif } = useNotifications()
   const { callState, incomingCall, localStream, remoteStream, startCall, answerCall, rejectCall, endCall, toggleCamera, toggleMicrophone } = useWebRTC()
 
@@ -163,7 +163,6 @@ export default function ChatPage() {
         setCurrentUser(user)
         setShowLogin(false)
         localStorage.setItem('chatUser', JSON.stringify(user))
-        authenticate(user.id, user.username, user.avatar)
 
         if (activeChannel) {
           joinChannel(activeChannel)

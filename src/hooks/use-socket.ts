@@ -1,46 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useCallback } from 'react'
-import { io, Socket } from 'socket.io-client'
+import { getSharedSocket, disconnectSharedSocket } from '@/lib/socket-instance'
 import { useChatStore } from '@/lib/chat-store'
 
-function getSocketUrl() {
-  // Production: use the Railway Socket.io URL
-  if (process.env.NEXT_PUBLIC_SOCKET_URL) {
-    return process.env.NEXT_PUBLIC_SOCKET_URL
-  }
-  // Sandbox: use Caddy gateway with XTransformPort
-  return undefined // will use relative path with XTransformPort
-}
-
-function createSocketConnection(): Socket {
-  const socketUrl = getSocketUrl()
-
-  if (socketUrl) {
-    // Production: connect directly to Railway
-    return io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      forceNew: true,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 10000,
-    })
-  }
-
-  // Sandbox: use Caddy gateway with XTransformPort
-  return io('/?XTransformPort=3003', {
-    transports: ['websocket', 'polling'],
-    forceNew: true,
-    reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    timeout: 10000,
-  })
-}
-
 export function useSocket() {
-  const socketRef = useRef<Socket | null>(null)
+  const socketRef = useRef<ReturnType<typeof getSharedSocket> | null>(null)
   const currentUserRef = useRef<any>(null)
   const activeChannelRef = useRef<string | null>(null)
   const {
@@ -61,16 +26,16 @@ export function useSocket() {
     activeChannelRef.current = activeChannel
   }, [activeChannel])
 
-  // Create socket connection once
+  // Create socket connection once using shared singleton
   useEffect(() => {
-    const socketInstance = createSocketConnection()
+    const socketInstance = getSharedSocket()
     socketRef.current = socketInstance
 
     socketInstance.on('connect', () => {
       console.log('[Socket] Connected')
       setIsConnected(true)
 
-      // Re-authenticate if user exists
+      // Re-authenticate if user exists (for reconnections)
       const user = currentUserRef.current
       if (user) {
         socketInstance.emit('auth', {
@@ -92,6 +57,9 @@ export function useSocket() {
     })
 
     socketInstance.on('new-message', (message: any) => {
+      // Don't add messages from ourselves - we already added them optimistically
+      const user = currentUserRef.current
+      if (user && message.userId === user.id) return
       addMessage(message)
     })
 
@@ -110,8 +78,21 @@ export function useSocket() {
       console.log(`[Socket] User left channel: ${data.user.username}`)
     })
 
+    // If socket is already connected, set state immediately
+    if (socketInstance.connected) {
+      setIsConnected(true)
+    }
+
     return () => {
-      socketInstance.disconnect()
+      // Don't disconnect the shared socket here - let the component that
+      // owns the socket lifecycle handle it. Just remove our listeners.
+      socketInstance.off('connect')
+      socketInstance.off('disconnect')
+      socketInstance.off('online-users')
+      socketInstance.off('new-message')
+      socketInstance.off('typing-users')
+      socketInstance.off('user-joined-channel')
+      socketInstance.off('user-left-channel')
     }
   // Only run once on mount - use refs for dynamic values
   }, [setIsConnected, addMessage, setOnlineUsers, setTypingUsers])
@@ -133,12 +114,6 @@ export function useSocket() {
       socketRef.current.emit('join-channel', { channelId: activeChannel })
     }
   }, [activeChannel, currentUser])
-
-  const authenticate = useCallback((userId: string, username: string, avatar: string) => {
-    if (socketRef.current) {
-      socketRef.current.emit('auth', { userId, username, avatar })
-    }
-  }, [])
 
   const joinChannel = useCallback((channelId: string) => {
     if (socketRef.current) {
@@ -172,7 +147,7 @@ export function useSocket() {
   }, [])
 
   return {
-    authenticate,
+    socketRef,
     joinChannel,
     leaveChannel,
     sendMessage,

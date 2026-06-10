@@ -83,10 +83,22 @@ export const useChatStore = create<ChatState>((set) => ({
 
   messages: [],
   setMessages: (messages) => set({ messages }),
-  addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
+  addMessage: (message) => set((state) => {
+    // Deduplicate: skip if message with same id already exists
+    if (state.messages.some(m => m.id === message.id)) return state
+    return { messages: [...state.messages, message] }
+  }),
 
   onlineUsers: [],
-  setOnlineUsers: (users) => set({ onlineUsers: users }),
+  setOnlineUsers: (users) => set({ 
+    // Deduplicate by user id (belt-and-suspenders for server-side dedup)
+    onlineUsers: users.reduce((acc: ChatUser[], u: ChatUser) => {
+      if (!acc.find(existing => existing.id === u.id)) {
+        acc.push(u)
+      }
+      return acc
+    }, [])
+  }),
 
   typingUsers: [],
   setTypingUsers: (users) => set({ typingUsers: users }),

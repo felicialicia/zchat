@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useCallback, useEffect, useState } from 'react'
-import { io, Socket } from 'socket.io-client'
+import { getSharedSocket } from '@/lib/socket-instance'
 import { useChatStore } from '@/lib/chat-store'
 
 // Free Google STUN servers for NAT traversal
@@ -13,37 +13,6 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
   ],
-}
-
-function getSocketUrl() {
-  if (process.env.NEXT_PUBLIC_SOCKET_URL) {
-    return process.env.NEXT_PUBLIC_SOCKET_URL
-  }
-  return undefined
-}
-
-function createCallSocketConnection(): Socket {
-  const socketUrl = getSocketUrl()
-
-  if (socketUrl) {
-    return io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      forceNew: false,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 10000,
-    })
-  }
-
-  return io('/?XTransformPort=3003', {
-    transports: ['websocket', 'polling'],
-    forceNew: false,
-    reconnection: true,
-    reconnectionAttempts: 10,
-    reconnectionDelay: 1000,
-    timeout: 10000,
-  })
 }
 
 export interface IncomingCallData {
@@ -66,7 +35,7 @@ export interface CallState {
 }
 
 export function useWebRTC() {
-  const socketRef = useRef<Socket | null>(null)
+  const socketRef = useRef<ReturnType<typeof getSharedSocket> | null>(null)
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
   const localStreamRef = useRef<MediaStream | null>(null)
   const remoteStreamRef = useRef<MediaStream | null>(null)
@@ -129,31 +98,21 @@ export function useWebRTC() {
     })
   }, [])
 
-  // ============ Socket connection & WebRTC signaling ============
+  // ============ Use shared socket for WebRTC signaling ============
 
   useEffect(() => {
-    const socketInstance = createCallSocketConnection()
+    // Get the shared socket instance (same one used by useSocket)
+    const socketInstance = getSharedSocket()
     socketRef.current = socketInstance
 
-    // Re-authenticate when connected
-    socketInstance.on('connect', () => {
-      if (currentUser) {
-        socketInstance.emit('auth', {
-          userId: currentUser.id,
-          username: currentUser.username,
-          avatar: currentUser.avatar,
-        })
-      }
-    })
-
     // Listen for incoming calls
-    socketInstance.on('incoming-call', (data: IncomingCallData) => {
+    const handleIncomingCall = (data: IncomingCallData) => {
       console.log('[WebRTC] Incoming call from', data.callerName)
       setIncomingCall(data)
-    })
+    }
 
     // Listen for call answered
-    socketInstance.on('call-answered', async (data: { answer: RTCSessionDescriptionInit }) => {
+    const handleCallAnswered = async (data: { answer: RTCSessionDescriptionInit }) => {
       console.log('[WebRTC] Call answered')
       if (peerConnectionRef.current) {
         try {
@@ -164,22 +123,22 @@ export function useWebRTC() {
           console.error('[WebRTC] Error setting remote description:', err)
         }
       }
-    })
+    }
 
     // Listen for call rejected
-    socketInstance.on('call-rejected', () => {
+    const handleCallRejected = () => {
       console.log('[WebRTC] Call rejected')
       cleanupCall()
-    })
+    }
 
     // Listen for call ended
-    socketInstance.on('call-ended', () => {
+    const handleCallEnded = () => {
       console.log('[WebRTC] Call ended by remote')
       cleanupCall()
-    })
+    }
 
     // Listen for ICE candidates from remote
-    socketInstance.on('ice-candidate', async (data: { candidate: RTCIceCandidateInit }) => {
+    const handleIceCandidate = async (data: { candidate: RTCIceCandidateInit }) => {
       if (peerConnectionRef.current && data.candidate) {
         try {
           await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate))
@@ -187,18 +146,31 @@ export function useWebRTC() {
           console.error('[WebRTC] Error adding ICE candidate:', err)
         }
       }
-    })
+    }
 
     // Listen for call failed
-    socketInstance.on('call-failed', (data: { reason: string }) => {
+    const handleCallFailed = (data: { reason: string }) => {
       console.error('[WebRTC] Call failed:', data.reason)
       cleanupCall()
-    })
+    }
+
+    socketInstance.on('incoming-call', handleIncomingCall)
+    socketInstance.on('call-answered', handleCallAnswered)
+    socketInstance.on('call-rejected', handleCallRejected)
+    socketInstance.on('call-ended', handleCallEnded)
+    socketInstance.on('ice-candidate', handleIceCandidate)
+    socketInstance.on('call-failed', handleCallFailed)
 
     return () => {
-      socketInstance.disconnect()
+      // Only remove our WebRTC listeners, don't disconnect the shared socket
+      socketInstance.off('incoming-call', handleIncomingCall)
+      socketInstance.off('call-answered', handleCallAnswered)
+      socketInstance.off('call-rejected', handleCallRejected)
+      socketInstance.off('call-ended', handleCallEnded)
+      socketInstance.off('ice-candidate', handleIceCandidate)
+      socketInstance.off('call-failed', handleCallFailed)
     }
-  }, [currentUser, startCallTimer, cleanupCall])
+  }, [startCallTimer, cleanupCall])
 
   // Create peer connection
   const createPeerConnection = useCallback(() => {

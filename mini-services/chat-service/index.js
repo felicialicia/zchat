@@ -26,6 +26,15 @@ io.on('connection', (socket) => {
   socket.on('auth', (data) => {
     const { userId, username, avatar } = data
 
+    // Remove any existing entry for this userId (old socket from reconnection/multi-tab)
+    for (const [sid, u] of onlineUsers.entries()) {
+      if (u.id === userId && sid !== socket.id) {
+        onlineUsers.delete(sid)
+        userChannels.delete(sid)
+        // Don't delete from userSocketMap yet, we'll update it below
+      }
+    }
+
     const onlineUser = {
       id: userId,
       username,
@@ -37,7 +46,15 @@ io.on('connection', (socket) => {
     userChannels.set(socket.id, new Set())
     userSocketMap.set(userId, socket.id)
 
-    io.emit('online-users', Array.from(onlineUsers.values()).map(u => ({
+    // Deduplicate: unique users by id before broadcasting
+    const uniqueUsers = Array.from(onlineUsers.values()).reduce((acc, u) => {
+      if (!acc.find(existing => existing.id === u.id)) {
+        acc.push(u)
+      }
+      return acc
+    }, [])
+
+    io.emit('online-users', uniqueUsers.map(u => ({
       id: u.id,
       username: u.username,
       avatar: u.avatar
@@ -211,7 +228,15 @@ io.on('connection', (socket) => {
       userChannels.delete(socket.id)
       userSocketMap.delete(user.id)
 
-      io.emit('online-users', Array.from(onlineUsers.values()).map(u => ({
+      // Deduplicate: unique users by id before broadcasting
+      const uniqueUsers = Array.from(onlineUsers.values()).reduce((acc, u) => {
+        if (!acc.find(existing => existing.id === u.id)) {
+          acc.push(u)
+        }
+        return acc
+      }, [])
+
+      io.emit('online-users', uniqueUsers.map(u => ({
         id: u.id,
         username: u.username,
         avatar: u.avatar

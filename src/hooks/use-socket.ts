@@ -4,6 +4,41 @@ import { useEffect, useRef, useCallback } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { useChatStore } from '@/lib/chat-store'
 
+function getSocketUrl() {
+  // Production: use the Railway Socket.io URL
+  if (process.env.NEXT_PUBLIC_SOCKET_URL) {
+    return process.env.NEXT_PUBLIC_SOCKET_URL
+  }
+  // Sandbox: use Caddy gateway with XTransformPort
+  return undefined // will use relative path with XTransformPort
+}
+
+function createSocketConnection(): Socket {
+  const socketUrl = getSocketUrl()
+
+  if (socketUrl) {
+    // Production: connect directly to Railway
+    return io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      forceNew: true,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+    })
+  }
+
+  // Sandbox: use Caddy gateway with XTransformPort
+  return io('/?XTransformPort=3003', {
+    transports: ['websocket', 'polling'],
+    forceNew: true,
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000,
+    timeout: 10000,
+  })
+}
+
 export function useSocket() {
   const socketRef = useRef<Socket | null>(null)
   const currentUserRef = useRef<any>(null)
@@ -28,19 +63,7 @@ export function useSocket() {
 
   // Create socket connection once
   useEffect(() => {
-    const socketUrl = typeof window !== 'undefined'
-      ? `${window.location.protocol}//${window.location.hostname}:3003`
-      : 'http://localhost:3003'
-
-    const socketInstance = io(socketUrl, {
-      transports: ['websocket', 'polling'],
-      forceNew: true,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 10000,
-    })
-
+    const socketInstance = createSocketConnection()
     socketRef.current = socketInstance
 
     socketInstance.on('connect', () => {
@@ -91,7 +114,6 @@ export function useSocket() {
       socketInstance.disconnect()
     }
   // Only run once on mount - use refs for dynamic values
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setIsConnected, addMessage, setOnlineUsers, setTypingUsers])
 
   // Authenticate when currentUser changes

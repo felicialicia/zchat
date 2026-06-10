@@ -15,6 +15,37 @@ const ICE_SERVERS: RTCConfiguration = {
   ],
 }
 
+function getSocketUrl() {
+  if (process.env.NEXT_PUBLIC_SOCKET_URL) {
+    return process.env.NEXT_PUBLIC_SOCKET_URL
+  }
+  return undefined
+}
+
+function createCallSocketConnection(): Socket {
+  const socketUrl = getSocketUrl()
+
+  if (socketUrl) {
+    return io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      forceNew: false,
+      reconnection: true,
+      reconnectionAttempts: 10,
+      reconnectionDelay: 1000,
+      timeout: 10000,
+    })
+  }
+
+  return io('/?XTransformPort=3003', {
+    transports: ['websocket', 'polling'],
+    forceNew: false,
+    reconnection: true,
+    reconnectionAttempts: 10,
+    reconnectionDelay: 1000,
+    timeout: 10000,
+  })
+}
+
 export interface IncomingCallData {
   callerId: string
   callerName: string
@@ -58,8 +89,6 @@ export function useWebRTC() {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null)
 
-  // ============ Declare functions BEFORE useEffect that uses them ============
-
   // Start call timer
   const startCallTimer = useCallback(() => {
     setCallState(prev => ({ ...prev, callDuration: 0 }))
@@ -102,17 +131,8 @@ export function useWebRTC() {
 
   // ============ Socket connection & WebRTC signaling ============
 
-  // Initialize socket connection for calls
   useEffect(() => {
-    const socketInstance = io('/?XTransformPort=3003', {
-      transports: ['websocket', 'polling'],
-      forceNew: false,
-      reconnection: true,
-      reconnectionAttempts: 10,
-      reconnectionDelay: 1000,
-      timeout: 10000,
-    })
-
+    const socketInstance = createCallSocketConnection()
     socketRef.current = socketInstance
 
     // Re-authenticate when connected

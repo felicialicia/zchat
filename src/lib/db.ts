@@ -7,18 +7,33 @@ const globalForPrisma = globalThis as unknown as {
 }
 
 function createPrismaClient() {
-  // In production with Turso, use the libsql adapter
-  if (process.env.TURSO_DATABASE_URL && process.env.TURSO_AUTH_TOKEN) {
-    const libsql = createClient({
-      url: process.env.TURSO_DATABASE_URL,
-      authToken: process.env.TURSO_AUTH_TOKEN,
-    })
+  const tursoUrl = process.env.TURSO_DATABASE_URL
+  const tursoToken = process.env.TURSO_AUTH_TOKEN
 
-    const adapter = new PrismaLibSql(libsql)
-    return new PrismaClient({ adapter })
+  console.log('[DB] Creating Prisma client...', {
+    hasTursoUrl: !!tursoUrl,
+    hasTursoToken: !!tursoToken,
+    nodeEnv: process.env.NODE_ENV,
+  })
+
+  // In production with Turso, use the libsql adapter
+  if (tursoUrl && tursoToken) {
+    try {
+      const libsql = createClient({
+        url: tursoUrl,
+        authToken: tursoToken,
+      })
+
+      const adapter = new PrismaLibSql(libsql)
+      console.log('[DB] Using Turso adapter')
+      return new PrismaClient({ adapter })
+    } catch (error) {
+      console.error('[DB] Failed to create Turso adapter, falling back:', error)
+    }
   }
 
   // In development, use local SQLite
+  console.log('[DB] Using local SQLite')
   return new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query'] : [],
   })

@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { useChatStore, ChatMessage } from '@/lib/chat-store'
 import { useSocket } from '@/hooks/use-socket'
+import { useNotifications } from '@/hooks/use-notifications'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -26,6 +27,13 @@ import {
   ChevronDown,
   Megaphone,
   Loader2,
+  Paperclip,
+  Mic,
+  MicOff,
+  Image as ImageIcon,
+  Bell,
+  BellOff,
+  Download,
 } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
 
@@ -53,6 +61,7 @@ export default function ChatPage() {
   } = useChatStore()
 
   const { authenticate, joinChannel, leaveChannel, sendMessage, sendTyping } = useSocket()
+  const { isSupported: notifSupported, permission: notifPermission, requestPermission: requestNotifPermission, notify: sendNotif } = useNotifications()
 
   const [inputMessage, setInputMessage] = useState('')
   const [loginUsername, setLoginUsername] = useState('')
@@ -62,10 +71,16 @@ export default function ChatPage() {
   const [channelsExpanded, setChannelsExpanded] = useState(true)
   const [usersExpanded, setUsersExpanded] = useState(true)
   const [isSending, setIsSending] = useState(false)
+  const [isRecording, setIsRecording] = useState(false)
+  const [isUploading, setIsUploading] = useState(false)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
 
   // Declare fetch functions first
   const fetchChannels = useCallback(async () => {
@@ -73,7 +88,6 @@ export default function ChatPage() {
       const res = await fetch('/api/chat/channels')
       const data = await res.json()
       setChannels(data)
-      // Auto-select first channel if none selected
       if (data.length > 0 && !activeChannel) {
         setActiveChannel(data[0].id)
       }
@@ -120,6 +134,13 @@ export default function ChatPage() {
       } catch {}
     }
   }, [setCurrentUser, setShowLogin])
+
+  // Request notification permission on login
+  useEffect(() => {
+    if (currentUser && notifSupported && notifPermission === 'default') {
+      requestNotifPermission()
+    }
+  }, [currentUser, notifSupported, notifPermission, requestNotifPermission])
 
   const handleLogin = async () => {
     if (!loginUsername.trim()) return
@@ -178,6 +199,7 @@ export default function ChatPage() {
     setIsSending(true)
     const content = inputMessage.trim()
     setInputMessage('')
+    setImagePreview(null)
 
     // Stop typing indicator
     sendTyping(activeChannel, false)
@@ -249,7 +271,6 @@ export default function ChatPage() {
     }
     addMessage(questionMessage)
 
-    // Send via WebSocket (if connected)
     if (isConnected) {
       sendMessage(activeChannel, `🤖 ${question}`, currentUser.id, currentUser.username, currentUser.avatar, 'ai-question')
     }
@@ -268,7 +289,6 @@ export default function ChatPage() {
       const data = await res.json()
 
       if (data.success) {
-        // Show AI response as a message
         const aiMessage = {
           id: `ai-${Date.now()}`,
           content: data.response,
@@ -284,7 +304,12 @@ export default function ChatPage() {
         }
         addMessage(aiMessage as ChatMessage)
 
-        // Save AI message to database
+        // Browser notification for AI response
+        sendNotif('Z.ai Assistant', {
+          body: data.response.substring(0, 100) + (data.response.length > 100 ? '...' : ''),
+          tag: `ai-${Date.now()}`,
+        })
+
         const aiUser = await fetch('/api/chat/users').then(r => r.json()).then((users: any[]) => users.find((u: any) => u.username === 'Z.ai Assistant'))
         if (aiUser) {
           await fetch('/api/chat/messages', {
@@ -310,10 +335,215 @@ export default function ChatPage() {
     setIsAiLoading(false)
   }
 
+  // =========== FILE UPLOAD ===========
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file || !currentUser || !activeChannel) return
+
+    setIsUploading(true)
+
+    try {
+      // Show preview for images
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader()
+        reader.onload = (ev) => {
+          setImagePreview(ev.target?.result as string)
+        }
+        reader.readAsDataURL(file)
+      }
+
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('channelId', activeChannel)
+      formData.append('userId', currentUser.id)
+
+      const res = await fetch('/api/chat/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await res.json()
+
+      if (data.success) {
+        const content = data.isImage
+          ? `📷 ${file.name}\n${data.url}`
+          : `📎 ${file.name} (${(file.size / 1024).toFixed(1)}KB)\n${data.url}`
+
+        const uploadMessage: ChatMessage = {
+          id: `upload-${Date.now()}`,
+          content,
+          type: data.isImage ? 'image' : 'file',
+          userId: currentUser.id,
+          channelId: activeChannel,
+          createdAt: new Date().toISOString(),
+          user: {
+            id: currentUser.id,
+            username: currentUser.username,
+            avatar: currentUser.avatar,
+          },
+        }
+        addMessage(uploadMessage)
+
+        if (isConnected) {
+          sendMessage(activeChannel, content, currentUser.id, currentUser.username, currentUser.avatar, data.isImage ? 'image' : 'file')
+        }
+
+        // Save to database
+        await fetch('/api/chat/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content,
+            type: data.isImage ? 'image' : 'file',
+            userId: currentUser.id,
+            channelId: activeChannel,
+          }),
+        })
+
+        toast({
+          title: 'File terkirim! 📎',
+          description: `${file.name} berhasil diupload`,
+        })
+      } else {
+        toast({
+          title: 'Upload gagal',
+          description: data.error || 'Gagal mengupload file',
+          variant: 'destructive',
+        })
+      }
+    } catch (error) {
+      toast({
+        title: 'Upload error',
+        description: 'Gagal mengupload file',
+        variant: 'destructive',
+      })
+    }
+
+    setImagePreview(null)
+    setIsUploading(false)
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  // =========== VOICE MESSAGE ===========
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg',
+      })
+      
+      audioChunksRef.current = []
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+      
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType })
+        stream.getTracks().forEach(track => track.stop())
+        await handleVoiceUpload(audioBlob)
+      }
+      
+      mediaRecorderRef.current = mediaRecorder
+      mediaRecorder.start()
+      setIsRecording(true)
+      
+      toast({
+        title: 'Merekam... 🎤',
+        description: 'Klik tombol mic lagi untuk berhenti',
+      })
+    } catch (error) {
+      toast({
+        title: 'Gagal merekam',
+        description: 'Pastikan browser punya akses mikrofon',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      setIsRecording(false)
+    }
+  }
+
+  const handleVoiceUpload = async (audioBlob: Blob) => {
+    if (!currentUser || !activeChannel) return
+
+    try {
+      const formData = new FormData()
+      formData.append('audio', audioBlob, 'voice-message.webm')
+
+      const res = await fetch('/api/chat/voice', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await res.json()
+
+      if (data.success) {
+        const content = `🎤 Pesan suara${data.transcription ? `: "${data.transcription}"` : ''}\n${data.audioUrl}`
+
+        const voiceMessage: ChatMessage = {
+          id: `voice-${Date.now()}`,
+          content,
+          type: 'voice',
+          userId: currentUser.id,
+          channelId: activeChannel,
+          createdAt: new Date().toISOString(),
+          user: {
+            id: currentUser.id,
+            username: currentUser.username,
+            avatar: currentUser.avatar,
+          },
+        }
+        addMessage(voiceMessage)
+
+        if (isConnected) {
+          sendMessage(activeChannel, content, currentUser.id, currentUser.username, currentUser.avatar, 'voice')
+        }
+
+        // Save to database
+        await fetch('/api/chat/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content,
+            type: 'voice',
+            userId: currentUser.id,
+            channelId: activeChannel,
+          }),
+        })
+
+        if (data.transcription) {
+          toast({
+            title: 'Pesan suara terkirim! 🎤',
+            description: `Transkripsi: "${data.transcription.substring(0, 50)}..."`,
+          })
+        } else {
+          toast({
+            title: 'Pesan suara terkirim! 🎤',
+          })
+        }
+      }
+    } catch (error) {
+      toast({
+        title: 'Gagal mengirim suara',
+        description: 'Upload pesan suara gagal',
+        variant: 'destructive',
+      })
+    }
+  }
+
   const handleInputChange = (value: string) => {
     setInputMessage(value)
 
-    // Typing indicator
     if (activeChannel && currentUser) {
       sendTyping(activeChannel, true)
 
@@ -439,9 +669,10 @@ export default function ChatPage() {
             </div>
           </div>
 
-          <p className="text-center text-xs text-muted-foreground mt-6">
-            Real-time chat dengan dukungan AI Assistant
-          </p>
+          <div className="text-center text-xs text-muted-foreground mt-6 space-y-1">
+            <p>💬 Chat real-time · 🤖 AI Assistant · 📎 Upload file</p>
+            <p>🎤 Pesan suara · 🔔 Notifikasi · 📱 Installable</p>
+          </div>
         </div>
       </div>
     )
@@ -485,7 +716,33 @@ export default function ChatPage() {
                   </Tooltip>
                 </TooltipProvider>
               )}
-              <Button variant="ghost" size="icon" className="lg:hidden" onClick={() => setSidebarOpen(false)}>
+              {/* Notification bell */}
+              {notifSupported && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => {
+                          if (notifPermission !== 'granted') {
+                            requestNotifPermission()
+                          }
+                        }}
+                        className="p-1 rounded hover:bg-muted"
+                      >
+                        {notifPermission === 'granted' ? (
+                          <Bell className="w-3.5 h-3.5 text-emerald-500" />
+                        ) : (
+                          <BellOff className="w-3.5 h-3.5 text-muted-foreground" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {notifPermission === 'granted' ? 'Notifikasi aktif' : 'Aktifkan notifikasi'}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+              <Button variant="ghost" size="icon" className="lg:hidden h-8 w-8" onClick={() => setSidebarOpen(false)}>
                 <X className="w-4 h-4" />
               </Button>
             </div>
@@ -688,6 +945,9 @@ export default function ChatPage() {
                   const isCurrentUser = msg.userId === currentUser?.id
                   const isAiMessage = msg.type === 'ai-response' || msg.userId === 'ai-assistant'
                   const isAiQuestion = msg.type === 'ai-question'
+                  const isImageMessage = msg.type === 'image'
+                  const isFileMessage = msg.type === 'file'
+                  const isVoiceMessage = msg.type === 'voice'
                   const showHeader =
                     index === 0 ||
                     messages[index - 1]?.userId !== msg.userId ||
@@ -705,10 +965,12 @@ export default function ChatPage() {
                           <Avatar className="w-9 h-9 mt-0.5 shrink-0">
                             <AvatarFallback
                               className="text-xs text-white font-medium"
-                              style={{ backgroundColor: isAiMessage ? '#8b5cf6' : msg.user?.avatar || '#6b7280' }}
+                              style={{ backgroundColor: isAiMessage ? '#8b5cf6' : isVoiceMessage ? '#14b8a6' : msg.user?.avatar || '#6b7280' }}
                             >
                               {isAiMessage ? (
                                 <Bot className="w-4 h-4" />
+                              ) : isVoiceMessage ? (
+                                <Mic className="w-4 h-4" />
                               ) : (
                                 getInitials(msg.user?.username || '??')
                               )}
@@ -728,12 +990,24 @@ export default function ChatPage() {
                                   AI
                                 </Badge>
                               )}
+                              {isVoiceMessage && (
+                                <Badge className="bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-300 text-[10px] px-1.5 py-0 h-4">
+                                  🎤 Suara
+                                </Badge>
+                              )}
                               <span className="text-[10px] text-muted-foreground">
                                 {formatTime(msg.createdAt)}
                               </span>
                             </div>
                             <div className="mt-0.5">
-                              <MessageContent content={msg.content} isAi={isAiMessage} isQuestion={isAiQuestion} />
+                              <MessageContent 
+                                content={msg.content} 
+                                isAi={isAiMessage} 
+                                isQuestion={isAiQuestion}
+                                isImage={isImageMessage}
+                                isFile={isFileMessage}
+                                isVoice={isVoiceMessage}
+                              />
                             </div>
                           </div>
                         </>
@@ -742,7 +1016,14 @@ export default function ChatPage() {
                           <div className="w-9 shrink-0" />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-baseline gap-2">
-                              <MessageContent content={msg.content} isAi={isAiMessage} isQuestion={isAiQuestion} />
+                              <MessageContent 
+                                content={msg.content} 
+                                isAi={isAiMessage} 
+                                isQuestion={isAiQuestion}
+                                isImage={isImageMessage}
+                                isFile={isFileMessage}
+                                isVoice={isVoiceMessage}
+                              />
                               <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                                 {formatTime(msg.createdAt)}
                               </span>
@@ -789,9 +1070,79 @@ export default function ChatPage() {
           </ScrollArea>
         </div>
 
+        {/* Image Preview */}
+        {imagePreview && (
+          <div className="px-4 py-2 border-t bg-card">
+            <div className="flex items-center gap-2">
+              <div className="relative w-16 h-16 rounded-lg overflow-hidden border">
+                <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
+              </div>
+              <span className="text-xs text-muted-foreground">Mengupload...</span>
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+            </div>
+          </div>
+        )}
+
         {/* Message Input */}
         <div className="p-4 border-t bg-card">
           <div className="flex items-center gap-2">
+            {/* File upload button */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv"
+              onChange={handleFileUpload}
+            />
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!activeChannel || isUploading}
+                    className="h-9 w-9 shrink-0 text-muted-foreground hover:text-foreground"
+                  >
+                    {isUploading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Paperclip className="w-4 h-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Upload file/gambar</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
+            {/* Voice record button */}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={isRecording ? stopRecording : startRecording}
+                    disabled={!activeChannel}
+                    className={`h-9 w-9 shrink-0 ${
+                      isRecording
+                        ? 'text-red-500 hover:text-red-600 bg-red-50 dark:bg-red-950 animate-pulse'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {isRecording ? (
+                      <MicOff className="w-4 h-4" />
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {isRecording ? 'Berhenti merekam' : 'Pesan suara'}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
             <div className="flex-1 flex items-center gap-2 bg-background border rounded-xl px-4 py-2 focus-within:ring-2 focus-within:ring-primary/20 focus-within:border-primary transition-all">
               <input
                 ref={inputRef}
@@ -813,7 +1164,7 @@ export default function ChatPage() {
                     variant="outline"
                     onClick={handleAiChat}
                     disabled={!inputMessage.trim() || !activeChannel || isAiLoading}
-                    className="h-10 w-10 shrink-0 border-violet-200 hover:bg-violet-50 hover:text-violet-600 dark:border-violet-800 dark:hover:bg-violet-950"
+                    className="h-9 w-9 shrink-0 border-violet-200 hover:bg-violet-50 hover:text-violet-600 dark:border-violet-800 dark:hover:bg-violet-950"
                   >
                     {isAiLoading ? (
                       <Loader2 className="w-4 h-4 animate-spin text-violet-500" />
@@ -830,14 +1181,16 @@ export default function ChatPage() {
               size="icon"
               onClick={handleSendMessage}
               disabled={!inputMessage.trim() || !activeChannel}
-              className="h-10 w-10 shrink-0 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700"
+              className="h-9 w-9 shrink-0 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700"
             >
               <Send className="w-4 h-4" />
             </Button>
           </div>
           <p className="text-[10px] text-muted-foreground mt-1.5 text-center">
-            Tekan <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">Enter</kbd> untuk kirim ·{' '}
-            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">🤖</kbd> untuk tanya AI
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">Enter</kbd> kirim ·{' '}
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">📎</kbd> file ·{' '}
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">🎤</kbd> suara ·{' '}
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">🤖</kbd> AI
           </p>
         </div>
       </div>
@@ -853,12 +1206,76 @@ export default function ChatPage() {
   )
 }
 
-// Message content component with special formatting
-function MessageContent({ content, isAi, isQuestion }: { content: string; isAi: boolean; isQuestion: boolean }) {
+// Message content component with special formatting for different types
+function MessageContent({ content, isAi, isQuestion, isImage, isFile, isVoice }: { 
+  content: string; isAi: boolean; isQuestion: boolean
+  isImage: boolean; isFile: boolean; isVoice: boolean
+}) {
+  // Image message
+  if (isImage) {
+    const lines = content.split('\n')
+    const imageUrl = lines[lines.length - 1]
+    const fileName = lines[0].replace('📷 ', '')
+    return (
+      <div className="space-y-1">
+        <span className="text-sm">{fileName}</span>
+        <div className="relative rounded-lg overflow-hidden border max-w-xs">
+          <img 
+            src={imageUrl} 
+            alt={fileName}
+            className="w-full h-auto max-h-64 object-cover"
+            loading="lazy"
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // File message
+  if (isFile) {
+    const lines = content.split('\n')
+    const fileUrl = lines[lines.length - 1]
+    const fileInfo = lines[0].replace('📎 ', '')
+    return (
+      <a
+        href={fileUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 px-3 py-2 bg-muted rounded-lg text-sm hover:bg-muted/80 transition-colors"
+      >
+        <Download className="w-4 h-4" />
+        <span>{fileInfo}</span>
+      </a>
+    )
+  }
+
+  // Voice message
+  if (isVoice) {
+    const lines = content.split('\n')
+    const audioUrl = lines[lines.length - 1]
+    const transcriptionLine = lines[0].replace('🎤 ', '')
+    const transcription = transcriptionLine.startsWith('Pesan suara: ') 
+      ? transcriptionLine.replace('Pesan suara: ', '').replace(/"/g, '')
+      : ''
+    return (
+      <div className="space-y-1">
+        <div className="inline-flex items-center gap-2 px-3 py-2 bg-teal-50 dark:bg-teal-950/30 rounded-lg">
+          <Mic className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+          <audio controls className="h-8 max-w-[240px]" preload="metadata">
+            <source src={audioUrl} />
+          </audio>
+        </div>
+        {transcription && (
+          <p className="text-xs text-muted-foreground italic">"{transcription}"</p>
+        )}
+      </div>
+    )
+  }
+
   // Strip the 🤖 prefix from AI questions
   const displayContent = isQuestion ? content.replace(/^🤖\s*/, '') : content
 
-  // For AI responses, support basic markdown-like formatting
+  // For AI responses
   if (isAi) {
     return (
       <div className="text-sm whitespace-pre-wrap break-words text-violet-900 dark:text-violet-200 leading-relaxed">

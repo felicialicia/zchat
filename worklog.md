@@ -117,3 +117,31 @@ Stage Summary:
 - Mobile and desktop layouts working correctly
 - WebSocket connection works through Caddy gateway when available
 - App gracefully handles WebSocket unavailability
+
+---
+Task ID: 8
+Agent: Main Agent
+Task: Fix all weaknesses - PWA, File Upload, Push Notifications, Voice Messages
+
+Work Log:
+- Added PWA support with manifest.json and apple-web-app meta tags
+- Created /api/chat/upload route for file/image upload (max 10MB, supports images, PDFs, docs, etc.)
+- Created /api/chat/voice route for voice message upload with ASR transcription via z-ai-web-dev-sdk
+- Created useNotifications hook for browser push notifications
+- Updated page.tsx with new UI: file upload button (📎), voice record button (🎤), notification bell (🔔)
+- Added image preview during upload
+- Added MediaRecorder-based voice recording with start/stop
+- Added special message rendering for image, file, and voice message types
+- Voice messages show audio player and transcription text
+- File messages show download link
+- Image messages show inline preview
+- Browser notifications for AI responses when page is not focused
+- PWA installable on mobile devices
+
+Stage Summary:
+- All 4 weaknesses addressed:
+  1. ✅ PWA support - Installable on mobile
+  2. ✅ File/image upload - 📎 button, max 10MB
+  3. ✅ Push notifications - 🔔 bell icon, browser notifications
+  4. ✅ Voice messages - 🎤 record with ASR transcription
+- VLM analysis confirmed all new features visible and working

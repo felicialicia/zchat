@@ -1,0 +1,20 @@
+{
+  "name": "ZChat - Chat Internal Tim",
+  "short_name": "ZChat",
+  "description": "Aplikasi chat internal real-time dengan dukungan AI Assistant",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#7c3aed",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["communication", "productivity"],
+  "screenshots": []
+}

@@ -18,8 +18,14 @@ export const metadata: Metadata = {
   description: "Aplikasi chat internal real-time dengan dukungan AI Assistant",
   keywords: ["ZChat", "chat", "internal", "real-time", "AI", "Next.js", "TypeScript"],
   authors: [{ name: "Z.ai Team" }],
+  manifest: "/manifest.json",
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+  },
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "ZChat",
   },
   openGraph: {
     title: "ZChat - Chat Internal Tim",
@@ -41,7 +47,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="id" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

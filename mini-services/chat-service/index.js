@@ -102,7 +102,9 @@ io.on('connection', (socket) => {
       createdAt: new Date().toISOString()
     }
 
-    io.to(channelId).emit('new-message', message)
+    // Use socket.to() instead of io.to() to avoid sending back to the sender
+    // The sender already has the message via optimistic local add
+    socket.to(channelId).emit('new-message', message)
   })
 
   socket.on('typing', (data) => {

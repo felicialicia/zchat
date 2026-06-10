@@ -1,0 +1,11 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.start]
+cmd = "node index.js"
+
+[variables]
+PORT = "3003"

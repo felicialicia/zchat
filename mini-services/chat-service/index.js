@@ -13,12 +13,29 @@ const io = new Server(httpServer, {
   pingInterval: 25000,
 })
 
+// onlineUsers: Map<socketId, { id, username, avatar, socketId }>
 const onlineUsers = new Map()
+// userChannels: Map<socketId, Set<channelId>>
 const userChannels = new Map()
+// typingUsers: Map<channelId, Set<socketId>>
 const typingUsers = new Map()
-const userSocketMap = new Map()
+// userSocketsMap: Map<userId, Set<socketId>> — tracks ALL sockets per user
+const userSocketsMap = new Map()
 
 const generateId = () => Math.random().toString(36).substr(2, 9) + Date.now().toString(36)
+
+// Helper: broadcast deduplicated online users
+function broadcastOnlineUsers() {
+  const seen = new Set()
+  const uniqueUsers = []
+  for (const u of onlineUsers.values()) {
+    if (!seen.has(u.id)) {
+      seen.add(u.id)
+      uniqueUsers.push({ id: u.id, username: u.username, avatar: u.avatar })
+    }
+  }
+  io.emit('online-users', uniqueUsers)
+}
 
 io.on('connection', (socket) => {
   console.log(`[Chat] User connected: ${socket.id}`)
@@ -26,41 +43,26 @@ io.on('connection', (socket) => {
   socket.on('auth', (data) => {
     const { userId, username, avatar } = data
 
-    // Remove any existing entry for this userId (old socket from reconnection/multi-tab)
-    for (const [sid, u] of onlineUsers.entries()) {
-      if (u.id === userId && sid !== socket.id) {
-        onlineUsers.delete(sid)
-        userChannels.delete(sid)
-        // Don't delete from userSocketMap yet, we'll update it below
-      }
+    // Track this socket for the user (supports multiple devices/tabs)
+    if (!userSocketsMap.has(userId)) {
+      userSocketsMap.set(userId, new Set())
     }
+    userSocketsMap.get(userId).add(socket.id)
 
-    const onlineUser = {
+    // Store user info keyed by socketId
+    onlineUsers.set(socket.id, {
       id: userId,
       username,
       avatar,
       socketId: socket.id
-    }
+    })
 
-    onlineUsers.set(socket.id, onlineUser)
     userChannels.set(socket.id, new Set())
-    userSocketMap.set(userId, socket.id)
 
-    // Deduplicate: unique users by id before broadcasting
-    const uniqueUsers = Array.from(onlineUsers.values()).reduce((acc, u) => {
-      if (!acc.find(existing => existing.id === u.id)) {
-        acc.push(u)
-      }
-      return acc
-    }, [])
+    // Broadcast deduplicated online users
+    broadcastOnlineUsers()
 
-    io.emit('online-users', uniqueUsers.map(u => ({
-      id: u.id,
-      username: u.username,
-      avatar: u.avatar
-    })))
-
-    console.log(`[Chat] ${username} authenticated, online: ${onlineUsers.size}`)
+    console.log(`[Chat] ${username} authenticated (socket: ${socket.id}), total sockets for user: ${userSocketsMap.get(userId).size}, online sockets: ${onlineUsers.size}`)
   })
 
   socket.on('join-channel', (data) => {
@@ -119,7 +121,7 @@ io.on('connection', (socket) => {
       createdAt: new Date().toISOString()
     }
 
-    // Use socket.to() instead of io.to() to avoid sending back to the sender
+    // Use socket.to() to avoid sending back to the sender
     // The sender already has the message via optimistic local add
     socket.to(channelId).emit('new-message', message)
   })
@@ -151,62 +153,73 @@ io.on('connection', (socket) => {
   // WebRTC signaling
   socket.on('call-user', (data) => {
     const { targetUserId, callerId, callerName, callerAvatar, callType, offer } = data
-    const targetSocketId = userSocketMap.get(targetUserId)
+    const sockets = userSocketsMap.get(targetUserId)
 
-    if (!targetSocketId) {
+    if (!sockets || sockets.size === 0) {
       socket.emit('call-failed', { reason: 'User is offline' })
       return
     }
 
     console.log(`[Call] ${callerName} calling ${targetUserId} (${callType})`)
-    io.to(targetSocketId).emit('incoming-call', {
-      callerId,
-      callerName,
-      callerAvatar,
-      callType,
-      offer,
-    })
+    // Send to all sockets of the target user
+    for (const sid of sockets) {
+      io.to(sid).emit('incoming-call', {
+        callerId,
+        callerName,
+        callerAvatar,
+        callType,
+        offer,
+      })
+    }
   })
 
   socket.on('answer-call', (data) => {
     const { callerId, answer } = data
-    const callerSocketId = userSocketMap.get(callerId)
+    const sockets = userSocketsMap.get(callerId)
 
-    if (!callerSocketId) {
+    if (!sockets || sockets.size === 0) {
       socket.emit('call-failed', { reason: 'Caller is offline' })
       return
     }
 
     console.log(`[Call] Call answered, sending answer to ${callerId}`)
-    io.to(callerSocketId).emit('call-answered', { answer })
+    for (const sid of sockets) {
+      io.to(sid).emit('call-answered', { answer })
+    }
   })
 
   socket.on('reject-call', (data) => {
     const { callerId } = data
-    const callerSocketId = userSocketMap.get(callerId)
+    const sockets = userSocketsMap.get(callerId)
 
-    if (callerSocketId) {
+    if (sockets) {
       console.log(`[Call] Call rejected by callee, notifying ${callerId}`)
-      io.to(callerSocketId).emit('call-rejected')
+      for (const sid of sockets) {
+        io.to(sid).emit('call-rejected')
+      }
     }
   })
 
   socket.on('end-call', (data) => {
     const { targetUserId } = data
-    const targetSocketId = userSocketMap.get(targetUserId)
+    const sockets = userSocketsMap.get(targetUserId)
 
-    if (targetSocketId) {
+    if (sockets) {
       console.log(`[Call] Call ended, notifying ${targetUserId}`)
-      io.to(targetSocketId).emit('call-ended')
+      for (const sid of sockets) {
+        io.to(sid).emit('call-ended')
+      }
     }
   })
 
   socket.on('ice-candidate', (data) => {
     const { targetUserId, candidate } = data
-    const targetSocketId = userSocketMap.get(targetUserId)
+    const sockets = userSocketsMap.get(targetUserId)
 
-    if (targetSocketId) {
-      io.to(targetSocketId).emit('ice-candidate', { candidate })
+    if (sockets) {
+      for (const sid of sockets) {
+        io.to(sid).emit('ice-candidate', { candidate })
+      }
     }
   })
 
@@ -224,25 +237,24 @@ io.on('connection', (socket) => {
         })
       }
 
+      // Remove this specific socket
       onlineUsers.delete(socket.id)
       userChannels.delete(socket.id)
-      userSocketMap.delete(user.id)
 
-      // Deduplicate: unique users by id before broadcasting
-      const uniqueUsers = Array.from(onlineUsers.values()).reduce((acc, u) => {
-        if (!acc.find(existing => existing.id === u.id)) {
-          acc.push(u)
+      // Remove socket from user's socket set
+      const sockets = userSocketsMap.get(user.id)
+      if (sockets) {
+        sockets.delete(socket.id)
+        // Only fully remove user if they have no more active sockets
+        if (sockets.size === 0) {
+          userSocketsMap.delete(user.id)
         }
-        return acc
-      }, [])
+      }
 
-      io.emit('online-users', uniqueUsers.map(u => ({
-        id: u.id,
-        username: u.username,
-        avatar: u.avatar
-      })))
+      // Broadcast updated online users
+      broadcastOnlineUsers()
 
-      console.log(`[Chat] ${user.username} disconnected, online: ${onlineUsers.size}`)
+      console.log(`[Chat] ${user.username} disconnected (socket: ${socket.id}), remaining sockets: ${sockets ? sockets.size : 0}`)
     }
   })
 

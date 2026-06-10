@@ -86,6 +86,17 @@ export const useChatStore = create<ChatState>((set) => ({
   addMessage: (message) => set((state) => {
     // Deduplicate: skip if message with same id already exists
     if (state.messages.some(m => m.id === message.id)) return state
+
+    // Content-based dedup: skip if a message with same content from same user
+    // in same channel within 5 seconds already exists (catches optimistic vs server messages)
+    const isDuplicate = state.messages.some(m =>
+      m.content === message.content &&
+      m.userId === message.userId &&
+      m.channelId === message.channelId &&
+      Math.abs(new Date(m.createdAt).getTime() - new Date(message.createdAt).getTime()) < 5000
+    )
+    if (isDuplicate) return state
+
     return { messages: [...state.messages, message] }
   }),
 

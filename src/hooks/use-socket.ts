@@ -57,10 +57,18 @@ export function useSocket() {
     })
 
     socketInstance.on('new-message', (message: any) => {
-      // Don't add messages from ourselves - we already added them optimistically
-      const user = currentUserRef.current
-      if (user && message.userId === user.id) return
-      addMessage(message)
+      // Normalize message structure from server (server sends flat, client expects nested user)
+      const normalizedMessage = {
+        ...message,
+        user: message.user || {
+          id: message.userId,
+          username: message.username || 'Unknown',
+          avatar: message.avatar || '#6b7280',
+        }
+      }
+      // Dedup is handled by addMessage (ID-based + content-based)
+      // Don't skip own messages — same user on different device should see them
+      addMessage(normalizedMessage)
     })
 
     socketInstance.on('typing-users', (data: { channelId: string; users: any[] }) => {

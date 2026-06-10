@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,20 +10,32 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
+model ChatUser {
   id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
+  username  String   @unique
+  avatar    String   @default("#6366f1")
+  isOnline  Boolean  @default(false)
+  lastSeen  DateTime @default(now())
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  messages  Message[]
 }
 
-model Post {
+model Channel {
+  id          String    @id @default(cuid())
+  name        String    @unique
+  description String    @default("")
+  type        String    @default("general")
+  createdAt   DateTime  @default(now())
+  messages    Message[]
+}
+
+model Message {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  content   String
+  type      String   @default("text")
+  userId    String
+  channelId String
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  user      ChatUser @relation(fields: [userId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id])
 }

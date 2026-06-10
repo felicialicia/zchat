@@ -4,6 +4,8 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useChatStore, ChatMessage } from '@/lib/chat-store'
 import { useSocket } from '@/hooks/use-socket'
 import { useNotifications } from '@/hooks/use-notifications'
+import { useWebRTC } from '@/hooks/use-webrtc'
+import { CallUI } from '@/components/call-ui'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -34,6 +36,9 @@ import {
   Bell,
   BellOff,
   Download,
+  PhoneCall,
+  Video,
+  Phone,
 } from 'lucide-react'
 import { toast } from '@/hooks/use-toast'
 
@@ -62,6 +67,7 @@ export default function ChatPage() {
 
   const { authenticate, joinChannel, leaveChannel, sendMessage, sendTyping } = useSocket()
   const { isSupported: notifSupported, permission: notifPermission, requestPermission: requestNotifPermission, notify: sendNotif } = useNotifications()
+  const { callState, incomingCall, localStream, remoteStream, startCall, answerCall, rejectCall, endCall, toggleCamera, toggleMicrophone } = useWebRTC()
 
   const [inputMessage, setInputMessage] = useState('')
   const [loginUsername, setLoginUsername] = useState('')
@@ -615,6 +621,14 @@ export default function ChatPage() {
     joinChannel(channelId)
   }
 
+  const handleStartCall = (userId: string, userName: string, userAvatar: string, type: 'audio' | 'video') => {
+    startCall(userId, userName, userAvatar, type)
+    toast({
+      title: type === 'video' ? 'Video Call 📹' : 'Panggilan Suara 📞',
+      description: `Menghubungi ${userName}...`,
+    })
+  }
+
   const activeChannelData = channels.find((c) => c.id === activeChannel)
 
   const getInitials = (name: string) => {
@@ -672,6 +686,7 @@ export default function ChatPage() {
           <div className="text-center text-xs text-muted-foreground mt-6 space-y-1">
             <p>💬 Chat real-time · 🤖 AI Assistant · 📎 Upload file</p>
             <p>🎤 Pesan suara · 🔔 Notifikasi · 📱 Installable</p>
+            <p>📞 Voice call · 📹 Video call</p>
           </div>
         </div>
       </div>
@@ -841,7 +856,7 @@ export default function ChatPage() {
                 {onlineUsers.map((user) => (
                   <div
                     key={user.id}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-muted-foreground"
+                    className="flex items-center gap-2 px-2 py-1.5 rounded-md text-sm text-muted-foreground group/user"
                   >
                     <div className="relative">
                       <Avatar className="w-6 h-6">
@@ -854,9 +869,38 @@ export default function ChatPage() {
                       </Avatar>
                       <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-card" />
                     </div>
-                    <span className="truncate">{user.username}</span>
-                    {currentUser?.id === user.id && (
-                      <span className="text-[10px] text-muted-foreground ml-auto">(Anda)</span>
+                    <span className="truncate flex-1">{user.username}</span>
+                    {currentUser?.id === user.id ? (
+                      <span className="text-[10px] text-muted-foreground">(Anda)</span>
+                    ) : (
+                      <div className="flex items-center gap-0.5 opacity-0 group-hover/user:opacity-100 transition-opacity">
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={() => handleStartCall(user.id, user.username, user.avatar, 'audio')}
+                                className="p-1 rounded hover:bg-emerald-100 dark:hover:bg-emerald-950 text-emerald-600"
+                              >
+                                <Phone className="w-3 h-3" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Panggil suara</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                onClick={() => handleStartCall(user.id, user.username, user.avatar, 'video')}
+                                className="p-1 rounded hover:bg-violet-100 dark:hover:bg-violet-950 text-violet-600"
+                              >
+                                <Video className="w-3 h-3" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent>Video call</TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -1190,7 +1234,8 @@ export default function ChatPage() {
             <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">Enter</kbd> kirim ·{' '}
             <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">📎</kbd> file ·{' '}
             <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">🎤</kbd> suara ·{' '}
-            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">🤖</kbd> AI
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">🤖</kbd> AI ·{' '}
+            <kbd className="px-1 py-0.5 bg-muted rounded text-[9px]">📞</kbd> call
           </p>
         </div>
       </div>
@@ -1202,6 +1247,22 @@ export default function ChatPage() {
           onClick={() => setSidebarOpen(false)}
         />
       )}
+
+      {/* WebRTC Call UI */}
+      <CallUI
+        callState={callState}
+        incomingCall={incomingCall}
+        localStream={localStream}
+        remoteStream={remoteStream}
+        onAnswerCall={answerCall}
+        onRejectCall={rejectCall}
+        onEndCall={endCall}
+        onToggleCamera={toggleCamera}
+        onToggleMicrophone={toggleMicrophone}
+        onStartCall={handleStartCall}
+        onlineUsers={onlineUsers}
+        currentUserId={currentUser?.id || null}
+      />
     </div>
   )
 }

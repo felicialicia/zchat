@@ -192,3 +192,38 @@ Stage Summary:
 - ZChat is live and accessible
 - All features verified working
 - No critical errors
+
+---
+Task ID: 11
+Agent: Main Agent
+Task: Add Voice Call & Video Call feature using WebRTC
+
+Work Log:
+- Updated Socket.io chat service with WebRTC signaling events:
+  - call-user, answer-call, reject-call, end-call, ice-candidate
+  - Added userSocketMap for direct user-to-user routing
+- Created use-webrtc.ts hook with full WebRTC peer connection management:
+  - ICE candidate exchange using free Google STUN servers
+  - Call initiation, answering, rejection, ending
+  - Camera and microphone toggle
+  - Call duration timer
+  - Automatic cleanup on disconnect
+- Created CallUI component (call-ui.tsx) with 3 states:
+  1. Incoming call overlay - shows caller info with answer/reject buttons
+  2. Active call screen - full screen with video/audio, mic/camera/end controls
+  3. Idle state - call buttons on online users in sidebar
+- Updated page.tsx:
+  - Added useWebRTC hook integration
+  - Added CallUI component
+  - Added 📞 and 📹 call buttons next to each online user (visible on hover)
+  - Updated login page feature text
+  - Updated hint text
+- Fixed lint error: moved startCallTimer and cleanupCall declarations before useEffect
+- All lint checks pass
+
+Stage Summary:
+- WebRTC voice & video call feature fully implemented
+- Uses free Google STUN servers (no cost)
+- Signaling through existing Socket.io server
+- Call buttons visible on hover over online users
+- Professional call UI with ringing animation, call duration timer, mic/camera toggle

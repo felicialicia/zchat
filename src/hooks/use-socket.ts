@@ -6,6 +6,8 @@ import { useChatStore } from '@/lib/chat-store'
 
 export function useSocket() {
   const socketRef = useRef<Socket | null>(null)
+  const currentUserRef = useRef<any>(null)
+  const activeChannelRef = useRef<string | null>(null)
   const {
     currentUser,
     activeChannel,
@@ -15,8 +17,22 @@ export function useSocket() {
     setTypingUsers,
   } = useChatStore()
 
+  // Keep refs in sync
   useEffect(() => {
-    const socketInstance = io('/?XTransformPort=3003', {
+    currentUserRef.current = currentUser
+  }, [currentUser])
+
+  useEffect(() => {
+    activeChannelRef.current = activeChannel
+  }, [activeChannel])
+
+  // Create socket connection once
+  useEffect(() => {
+    const socketUrl = typeof window !== 'undefined'
+      ? `${window.location.protocol}//${window.location.hostname}:3003`
+      : 'http://localhost:3003'
+
+    const socketInstance = io(socketUrl, {
       transports: ['websocket', 'polling'],
       forceNew: true,
       reconnection: true,
@@ -32,11 +48,12 @@ export function useSocket() {
       setIsConnected(true)
 
       // Re-authenticate if user exists
-      if (currentUser) {
+      const user = currentUserRef.current
+      if (user) {
         socketInstance.emit('auth', {
-          userId: currentUser.id,
-          username: currentUser.username,
-          avatar: currentUser.avatar,
+          userId: user.id,
+          username: user.username,
+          avatar: user.avatar,
         })
       }
     })
@@ -47,6 +64,7 @@ export function useSocket() {
     })
 
     socketInstance.on('online-users', (users: any[]) => {
+      console.log('[Socket] Online users:', users.length)
       setOnlineUsers(users)
     })
 
@@ -55,8 +73,9 @@ export function useSocket() {
     })
 
     socketInstance.on('typing-users', (data: { channelId: string; users: any[] }) => {
-      if (data.channelId === activeChannel) {
-        setTypingUsers(data.users.filter((u: any) => u.id !== currentUser?.id))
+      if (data.channelId === activeChannelRef.current) {
+        const user = currentUserRef.current
+        setTypingUsers(data.users.filter((u: any) => u.id !== user?.id))
       }
     })
 
@@ -71,7 +90,20 @@ export function useSocket() {
     return () => {
       socketInstance.disconnect()
     }
-  }, [setIsConnected, addMessage, setOnlineUsers, setTypingUsers, activeChannel, currentUser])
+  // Only run once on mount - use refs for dynamic values
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setIsConnected, addMessage, setOnlineUsers, setTypingUsers])
+
+  // Authenticate when currentUser changes
+  useEffect(() => {
+    if (socketRef.current && currentUser && socketRef.current.connected) {
+      socketRef.current.emit('auth', {
+        userId: currentUser.id,
+        username: currentUser.username,
+        avatar: currentUser.avatar,
+      })
+    }
+  }, [currentUser])
 
   // Re-join channel when active channel changes
   useEffect(() => {
